@@ -1,16 +1,18 @@
 package com.dexcom.clarity.extractor;
 
 import com.dexcom.clarity.config.AppConfig;
-import com.google.api.client.http.*;
-import com.google.api.client.http.HttpResponse;
-import com.google.api.client.http.HttpRequest;
-import com.google.api.client.http.HttpRequestFactory;
-import com.google.api.client.http.javanet.NetHttpTransport;
-import com.google.api.client.json.gson.GsonFactory;
+import okhttp3.MediaType;
+import okhttp3.OkHttpClient;
+import okhttp3.Request;
+import okhttp3.RequestBody;
+import okhttp3.Response;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDate;
 
 /**
@@ -19,55 +21,91 @@ import java.time.LocalDate;
  */
 public class ClarityExtractor {
 
-    private String accessToken;
-    private String subjectId;
-    private String analysisSession;
+    private AppConfig appConfig;
     private LocalDate startDate;
     private LocalDate endDate;
-    private int numThreads;
 
-    private Logger logger;
+    private static final MediaType JSON = MediaType.parse("application/json; charset=utf-8");
+    private static final Logger logger = LogManager.getLogger(ClarityExtractor.class);
+    private static final OkHttpClient client = new OkHttpClient();
 
-    static final HttpTransport HTTP_TRANSPORT = new NetHttpTransport();
-    static final GsonFactory GSON_FACTORY = new GsonFactory();
-
-    public ClarityExtractor(AppConfig appConfig, LocalDate startDate, LocalDate endDate) {
-        this.accessToken = appConfig.accessToken();
-        this.subjectId = appConfig.subjectId();
-        this.analysisSession = appConfig.analysisSession();
-        this.numThreads = appConfig.numThreads();
-        this.startDate = startDate;
-        this.endDate = endDate;
-        this.logger = LogManager.getLogger(ClarityExtractor.class);
+    ClarityExtractor(AppConfig appConfig) {
+        this.appConfig = appConfig;
+        this.validateConfig();
     }
 
-    private GenericUrl dataUrl() {
-        return new GenericUrl("https://clarity.dexcom.com/api/subject/" +
-                this.subjectId + "/analysis_session/" +
-                this.analysisSession + "/data/");
+    private void validateConfig() {
+        if(this.appConfig.accessToken() == null) {
+            logger.error("Dexcom Access-Token required; please set the accessToken property in AppConfig.properties.");
+        } else {
+            logger.info("Dexcom Access-Token set; proceeding to extract logs.");
+        }
+
+        if(this.appConfig.startDate() == null) {
+            logger.warn("No start date provided; defaulting to one year ago.");
+            this.setStartDate(LocalDate.now().minusYears(1));
+        } else {
+            this.setStartDate(LocalDate.parse(this.appConfig.startDate()));
+        }
+
+        if(this.appConfig.endDate() == null) {
+            logger.warn("No end date provided; defaulting to today's date.");
+            this.setEndDate(LocalDate.now());
+        } else {
+            this.setEndDate(LocalDate.parse(this.appConfig.endDate()));
+        }
     }
 
-    public void run() throws IOException {
-        HttpRequestFactory requestFactory = HTTP_TRANSPORT.createRequestFactory(new HttpRequestInitializer() {
-            @Override
-            public void initialize(HttpRequest request) throws IOException {
-                request.setParser(GSON_FACTORY.createJsonObjectParser());
+    private String dataUrl() {
+        return "https://clarity.dexcom.com/api/subject/" + this.appConfig.subjectId() +
+               "/analysis_session/" + this.appConfig.analysisSession() +
+               "/data";
+    }
+
+    private String post(String url, String json) throws IOException {
+        logger.info("Using dataUrl: " + this.dataUrl());
+        RequestBody body = RequestBody.create(JSON, json);
+        Request request = new Request.Builder().url(url).post(body).header("Access-Token", this.appConfig.accessToken()).build();
+        Response response = client.newCall(request).execute();
+        return response.body().string();
+    }
+
+    private void toFile(String httpResponse) {
+        Path extractFolder = Paths.get(this.appConfig.extractFolder());
+        if(Files.isWritable(extractFolder)) {
+            try {
+                Path extractFile = extractFolder.resolve(this.getStartDate() + "_" + this.getEndDate());
+                Files.write(extractFile, httpResponse.getBytes());
+            } catch(IOException e) {
+                logger.error("An exception occurred writing logs to file: " + e.getMessage());
             }
-        });
+        } else {
+            logger.error("Unable to write to extract file location " + extractFolder);
+        }
+    }
 
-        String requestBody = "{'localDateTimeInterval':['" + this.startDate + "/" + this.endDate + "']}";
+    public void run() {
+        try {
+            String res = this.post(this.dataUrl(), "{\"localDateTimeInterval\":[\"" + this.getStartDate() + "/" + this.getEndDate() + "\"]}");
+            this.toFile(res);
+        } catch(IOException e) {
+            logger.error("An exception occurred: " + e.getMessage());
+        }
+    }
 
-        logger.info("requestBody: " + requestBody);
+    public LocalDate getStartDate() {
+        return this.startDate;
+    }
 
-        HttpRequest request = requestFactory.buildPostRequest(dataUrl(), ByteArrayContent.fromString("application/json", requestBody));
-        request.getHeaders().setContentType("application/json").set("Access-Token", this.accessToken);
+    public void setStartDate(LocalDate startDate) {
+        this.startDate = startDate;
+    }
 
-        logger.info("Formed HTTP request method: " + request.getRequestMethod());
-        logger.info("Formed HTTP headers: " + request.getHeaders());
-        logger.info("Formed HTTP request URL: " + request.getUrl());
-        logger.info("Formed HTTP request content: " + request.getContent());
+    public LocalDate getEndDate() {
+        return this.endDate;
+    }
 
-        HttpResponse response = request.execute();
-        logger.info(response.parseAsString());
+    public void setEndDate(LocalDate endDate) {
+        this.endDate = endDate;
     }
 }
