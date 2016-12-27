@@ -16,4 +16,5 @@ public interface AppConfig extends Config {
     String endDate();
     String extractFolder();
     int numThreads();
+    boolean deserialize();
 }

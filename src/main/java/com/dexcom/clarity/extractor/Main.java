@@ -1,9 +1,12 @@
 package com.dexcom.clarity.extractor;
 
 import com.dexcom.clarity.config.AppConfig;
+import com.dexcom.clarity.deserializers.ClarityDeserializer;
 import org.aeonbits.owner.ConfigFactory;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+
+import java.io.IOException;
 
 /**
  * Created by chris on 12/22/16.
